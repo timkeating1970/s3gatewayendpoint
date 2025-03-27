@@ -1,0 +1,106 @@
+# This template will enable Cost Optimization by enabling COST08-BP02 "Select components to 
+# optimize data transfer cost" by creating VPC endpoints within AWS 
+# this not only makes communication more secure, critically to COST08-BP02 it will lower
+# data transfer charges because the communication does not exit AWS
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'CloudFormation template for S3 Gateway Endpoint with secure access configuration'
+
+Parameters:
+  BucketName:
+    Type: String
+    Description: Name of the S3 bucket to be accessed through the VPC endpoint
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC ID where the endpoint will be created
+  RouteTableId:
+    Type: String
+    Description: Route table ID to associate with the endpoint
+
+Resources:
+  # S3 Gateway Endpoint
+  S3GatewayEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: '*'
+            Action:
+              - 's3:GetObject'
+              - 's3:PutObject'
+              - 's3:ListBucket'
+            Resource:
+              - !Sub 'arn:aws:s3:::${BucketName}'
+              - !Sub 'arn:aws:s3:::${BucketName}/*'
+      RouteTableIds:
+        - !Ref RouteTableId
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.s3'
+      VpcId: !Ref VpcId
+      VpcEndpointType: Gateway
+
+  # IAM Role for EC2 instances
+  EC2InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: S3VPCEndpointAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 's3:GetObject'
+                  - 's3:PutObject'
+                  - 's3:ListBucket'
+                Resource:
+                  - !Sub 'arn:aws:s3:::${BucketName}'
+                  - !Sub 'arn:aws:s3:::${BucketName}/*'
+                Condition:
+                  StringEquals:
+                    aws:SourceVpce: !Ref S3GatewayEndpoint
+
+  # EC2 Instance Profile
+  EC2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref EC2InstanceRole
+
+  # S3 Bucket Policy
+  S3BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref BucketName
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowVPCEndpointAccess
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource:
+              - !Sub 'arn:aws:s3:::${BucketName}'
+              - !Sub 'arn:aws:s3:::${BucketName}/*'
+            Condition:
+              StringNotEquals:
+                aws:SourceVpce: !Ref S3GatewayEndpoint
+
+Outputs:
+  VPCEndpointId:
+    Description: VPC Endpoint ID
+    Value: !Ref S3GatewayEndpoint
+  
+  EC2InstanceProfileArn:
+    Description: Instance Profile ARN for EC2 instances
+    Value: !GetAtt EC2InstanceProfile.Arn
